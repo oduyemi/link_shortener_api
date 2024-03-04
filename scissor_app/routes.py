@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from scissor_app import app, models, schemas
 from passlib.context import CryptContext
 from typing import Optional, List
-from scissor_app.models import Users, URL, Visit, Contact
-from .schemas import RegisterRequest, LoginRequest, UpdateRequest, VisitResponse, ContactResponse, ContactRequest, ShortenerRequest, QRResponse, VisitDetail
+from scissor_app.models import Users, URL, Visit
+from .schemas import RegisterRequest, LoginRequest, UpdateRequest, VisitResponse, ShortenerRequest, QRResponse, VisitDetail
 from .dependencies import get_db
 from io import BytesIO
 from dotenv import load_dotenv
