@@ -1,21 +1,22 @@
-import os, random, string, qr_codes, qrcode, base64, hashlib, io, validators, time, logging, urllib.parse
+import os, random, string, qr_codes, qrcode, base64, bcrypt, hashlib, io, validators, time, urllib.parse
 from datetime import datetime
 from cachetools import TTLCache, cached
 from fastapi import APIRouter, Request, status, Depends, HTTPException, Form
 from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse, JSONResponse
+from .auth import create_access_token, authenticate_user, verify_token
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from scissor_app import app, models, schemas
 from passlib.context import CryptContext
 from typing import Optional, List
 from scissor_app.models import Users, URL, Visit
-from .schemas import RegisterRequest, LoginRequest, UpdateRequest, VisitResponse, ShortenerRequest, QRResponse, VisitDetail
-from .dependencies import get_db
+from .schemas import RegisterRequest, LoginRequest, UserResponse, VisitResponse, ShortenerRequest, QRResponse, VisitDetail
+from .dependencies import get_db, get_current_user
 from io import BytesIO
 from dotenv import load_dotenv
 from config import SECRET_KEY, DATABASE_URI
 from functools import wraps
-from email.mime.text import MIMEText
+
 
 
 
@@ -39,7 +40,6 @@ def verify_password(plain_password, hashed_password):
 scissor_router = APIRouter()
 
 cache = TTLCache(maxsize=100, ttl=300)
-
 
 
 # URL VALIDATOR
@@ -103,9 +103,6 @@ def generate_qr_code(data: str, qr_codes_path: str = "qr_codes"):
     return StreamingResponse(content=image_bytes, media_type="image/png")
 
 
-
-
-
 @app.get("/")
 async def get_index():
     return {"message": "Scissor!"}
@@ -115,23 +112,22 @@ async def get_index():
 async def register_user(user_request: RegisterRequest, db: Session = Depends(get_db)):
     try:
         if user_request.pwd != user_request.cpwd:
-            raise HTTPException(status_code=400, detail="Passwords must match!")
+            raise HTTPException(status_code=400, detail="Both passwords must match!")
 
-        if not all([user_request.fname, user_request.lname, user_request.email, user_request.pwd, user_request.cpwd]):
+        if not all([user_request.fname, user_request.surname, user_request.email, user_request.pwd, user_request.cpwd]):
             raise HTTPException(status_code=400, detail="All fields are required")
 
         existing_user = db.query(Users).filter(Users.email == user_request.email).first()
         if existing_user:
-            raise HTTPException(status_code=400, detail="Email is not available. Use another email address")
+            raise HTTPException(status_code=400, detail="Email already taken!")
 
         hashedpwd = hash_password(user_request.pwd)
 
         new_user = Users(
             fname=user_request.fname,
-            lname=user_request.lname,
+            surname=user_request.surname,
             email=user_request.email,
             hashedpwd=hashedpwd,
-            api_key=generate_api_key()
         )
 
         db.add(new_user)
@@ -142,7 +138,7 @@ async def register_user(user_request: RegisterRequest, db: Session = Depends(get
 
         return {
             "fname": new_user.fname,
-            "lname": new_user.lname,
+            "surname": new_user.surname,
             "email": new_user.email,
             "token": token
         }
@@ -164,16 +160,14 @@ async def login_user(user_request: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=401, detail="Incorrect username or password")
 
         access_token = create_access_token(data={"sub": user.email})
-        print(f"Access Token: {access_token}")
 
         return JSONResponse(content={
             "access_token": access_token, "token_type": "bearer",
             "user": {
                 "id": user.id,
                 "fname": user.fname,
-                "lname": user.lname,
-                "email": user.email,
-                "api_key": user.api_key
+                "surname": user.surname,
+                "email": user.email
             }
         })
             
@@ -193,7 +187,7 @@ async def get_users(db: Session = Depends(get_db)):
             UserResponse(
                 id = user.id,
                 fname = user.fname,
-                lname = user.lname,
+                surname = user.surname,
                 email = user.email,
             )
             for user in users
@@ -215,65 +209,12 @@ async def get_user(id: int, db: Session = Depends(get_db)):
         user_response = schemas.UserResponse(
             id = user.id,
             fname = user.fname,
-            lname = user.lname,
+            surname = user.surname,
             email = user.email,
             hashedpwd = user.hashedPwd
         )
 
         return user_response
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
-
-@app.put("/users/{id}", response_model=schemas.UserResponse)
-async def edit_profile(id: int, user_data: schemas.UpdateRequest, db: Session = Depends(get_db)):
-    try:
-        user = db.query(Users).filter(Users.id == id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not available!")
-
-        if user_data.fname:
-            user.fname = user_data.fname
-        if user_data.lname:
-            user.lname = user_data.lname
-        if user_data.email:
-            user.email = user_data.email
-
-        db.commit()
-
-        return schemas.UserResponse(
-            id=user.id,
-            fname=user.fname,
-            lname=user.lname,
-            email=user.email,
-        )
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
-
-
-@app.put("/users/{id}", response_model=schemas.UserResponse)
-async def edit_profile(id: int, user_data: schemas.UpdateRequest, db: Session = Depends(get_db)):
-    try:
-        user = db.query(Users).filter(Users.id == id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not available!")
-
-        if user_data.fname:
-            user.fname = user_data.fname
-        if user_data.lname:
-            user.lname = user_data.lname
-        if user_data.email:
-            user.email = user_data.email
-
-        db.commit()
-
-        return schemas.UserResponse(
-            id=user.id,
-            fname=user.fname,
-            lname=user.lname,
-            email=user.email,
-        )
     except Exception as e:
         print(f"Error: {e}")
         raise
@@ -284,22 +225,27 @@ async def edit_profile(id: int, user_data: schemas.UpdateRequest, db: Session = 
 def create_short_url(request: ShortenerRequest, db: Session = Depends(get_db)):
     try:
         url = request.original_url
+        user_id = request.id
+        user = db.query(Users).filter(Users.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
         print(f"Received URL: {url}")
-        print("Client IP Address:", request.client.host)
-        print("Request Headers:", dict(request.headers))
 
         if not validate_url(url):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL")
 
         hashed = hashlib.md5(url.encode())
         url_hash = base64.urlsafe_b64encode(hashed.digest()).decode('utf-8')[:10]
-        
+
         db_url = db.query(URL).filter(URL.original_url == url).first()
         if db_url:
             return {
                 "original_url": db_url.original_url,
                 "shortened_url": db_url.shortened_url,
-                "qr_code_image": db_url.qr_code_path 
+                "qr_code_image": db_url.qr_code_path,
+                "user_id": db_url.user_id
             }
 
         else:
@@ -307,10 +253,10 @@ def create_short_url(request: ShortenerRequest, db: Session = Depends(get_db)):
             qr_code_path, qr_code_image = generate_qr_code_image(url_hash)
 
             db_url = URL(
-                ip_address=request.client.host,
-                original_url = url,
-                shortened_url = short_url,
-                qr_code_path = qr_code_path,
+                original_url=url,
+                shortened_url=short_url,
+                qr_code_path=qr_code_path,
+                user_id=user_id
             )
             db.add(db_url)
             db.commit()
@@ -319,12 +265,14 @@ def create_short_url(request: ShortenerRequest, db: Session = Depends(get_db)):
             return {
                 "original_url": db_url.original_url,
                 "shortened_url": db_url.shortened_url,
-                "qr_code_image": qr_code_image
+                "qr_code_image": qr_code_image,
+                "user_id": db_url.user_id
             }
 
     except (HTTPException, Exception) as e:
         print(f"Error: {e}")
         raise
+
 
 
 @app.get("/{short_url}", response_model=schemas.ShortenResponse)
@@ -341,9 +289,9 @@ def redirect_to_original(short_url: str, request: Request, db: Session = Depends
         url.visit_count += 1
 
         visit = Visit(
-            short_url=short_url,
-            time_shortened=url.id,
-            visit_time=datetime.utcnow()
+            short_url = short_url,
+            url_id = url.id,
+            visit_time = datetime.utcnow()
         )
         db.add(visit)
         db.commit()
@@ -358,8 +306,7 @@ def redirect_to_original(short_url: str, request: Request, db: Session = Depends
         return RedirectResponse(link)
 
     except (HTTPException, Exception) as e:
-        logger.error(f"Error: {e}")
-        raise
+        print(f"Error: {e}")
 
 
 @app.get("/get-qr/{short_url}")
@@ -408,14 +355,14 @@ def get_original_url(short_url: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Link is not valid")
 
     except (HTTPException, Exception) as e:
-        logger.error(f"Error: {e}")
+        print(f"Error: {e}")
         raise 
 
 
 @app.get("/analytics/{short_url}", response_model=schemas.VisitResponse)
 def get_analytics(short_url: str, request: Request, db: Session = Depends(get_db)):
     try:
-        logger.info(f"Received URL: {short_url}")
+        print(f"Received URL: {short_url}")
         url = db.query(URL).filter(URL.shortened_url == short_url).first()
 
         if url is None:
@@ -434,8 +381,35 @@ def get_analytics(short_url: str, request: Request, db: Session = Depends(get_db
         return response_model
 
     except HTTPException as e:
-        logger.error(f"HTTP Exception: {e}")
+        print(f"HTTP Exception: {e}")
         raise
     except Exception as e:
-        logger.error(f"Error: {e}")
+        print(f"Error: {e}")
         raise
+
+
+@app.get("/link-history/{id}", response_model=list[schemas.LinkHistoryResponse])
+def get_link_history(id: int, db: Session = Depends(get_db)):
+    try:
+        user = db.query(models.Users).filter(models.Users.id == id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        link_history = []
+        for url in user.urls:
+            visit_count = db.query(models.Visit).filter(models.Visit.url_id == url.id).count()
+            visits = db.query(models.Visit).filter(models.Visit.url_id == url.id).all()
+            times_visited = [visit.visit_time for visit in visits]
+
+            link_history.append({
+                "id": id,
+                "original_url": url.original_url,
+                "shortened_url": url.shortened_url,
+                "visit_count": visit_count,
+                "times_visited": times_visited
+            })
+
+        return link_history
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")

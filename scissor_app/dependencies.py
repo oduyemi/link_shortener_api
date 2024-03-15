@@ -19,8 +19,8 @@ def get_token(db: Session = Depends(SessionLocal), token: str = Depends(oauth2_s
         )
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id: int = payload.get("sub")
-            if user_id is None:
+            id: int = payload.get("sub")
+            if id is None:
                 raise credentials_exception
         except JWTError:
             raise credentials_exception
@@ -38,8 +38,8 @@ def get_db():
     finally:
         db.close()
 
-def create_jwt_token(user_id: int, user_email: str):
-    payload = {"sub": user_id, "email": user_email}
+def create_jwt_token(id: int, email: str):
+    payload = {"sub": id, "email": email}
     secret_key = "your_secret_key"
     token = jwt.encode(payload, secret_key, algorithm="HS256")
     return token
@@ -52,17 +52,17 @@ def get_user_from_session(token: str = Depends(oauth2_scheme), db: Session = Dep
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
-        if user_id is None:
+        id: int = payload.get("sub")
+        if id is None:
             raise credentials_exception
     except JWTError as e:
         print(f"JWTError: {e}")
         raise credentials_exception
 
-    user = db.query(models.User).filter(models.User.user_id == user_id).first()
+    user = db.query(models.User).filter(models.User.id == id).first()
     if user is None:
         raise credentials_exception
-    return user.user_id
+    return user.id
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -88,7 +88,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         print(f"Current User Error: {e}")
         raise credentials_exception
 
-    db_user = db.query(models.User).filter(models.User.user_email == email).first()
+    db_user = db.query(models.User).filter(models.User.email == email).first()
     if db_user is None:
         raise credentials_exception
 

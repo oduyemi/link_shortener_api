@@ -6,7 +6,7 @@ from typing import Optional, List
 
 class RegisterRequest(BaseModel):
     fname: str
-    lname: str
+    surname: str
     email: str
     pwd: str
     cpwd: str
@@ -15,31 +15,31 @@ class LoginRequest(BaseModel):
     email: str
     pwd: str
 
-class UpdateRequest(BaseModel):
-    fname: Optional[str] = None
-    lname: Optional[str] = None
-    email: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: int
     fname: str
-    lname: str
+    surname: str
     email: str
 
 
 class ShortenerRequest(BaseModel):
     original_url: str
-    ip_address: str 
+    id: int
 
 
 class ShortenerResponse(BaseModel):
     original_url: str
     shortened_url:str
     qr_code_image: str
+    user_id: int
 
-class CheckerResponse(BaseModel):
+class LinkHistoryResponse(BaseModel):
+    id: int
+    original_url: str
     shortened_url: str
-    qr_code_image: str
+    visit_count: int
+    times_visited: List[datetime]
 
 
 class ShortenResponse(BaseModel):
@@ -57,7 +57,7 @@ class URLRequest(BaseModel):
     qr_code_path: Optional[str]
     visit_count: Optional[int]
     visit_time: Optional[datetime]
-    ip_address: Optional[str] 
+ 
 
 
 class URLResponse(BaseModel):
